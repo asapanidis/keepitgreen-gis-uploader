@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>KeepItGreen GIS Uploader</title>
+  <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 0; background:#f5f7f8; color:#182026; }
+    .wrap { max-width: 920px; margin: 36px auto; padding: 0 18px; }
+    .card { background:white; border-radius:16px; box-shadow:0 8px 30px rgba(0,0,0,.08); padding:24px; }
+    h1 { margin:0 0 6px; font-size:28px; }
+    .muted { color:#5f6b73; }
+    .drop {
+      border:2px dashed #9aa7af; border-radius:14px; padding:34px; text-align:center;
+      cursor:pointer; margin:20px 0; background:#fbfcfc;
+    }
+    .drop.drag { border-color:#2d7a46; background:#f0f8f2; }
+    input[type=file] { display:none; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-top:16px; }
+    label { font-size:13px; font-weight:600; display:block; margin-bottom:6px; }
+    input[type=text], select, textarea {
+      width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid #c8d0d5;
+      border-radius:9px; background:white; font:inherit;
+    }
+    textarea { min-height:86px; resize:vertical; }
+    button {
+      border:0; border-radius:10px; padding:12px 18px; font-weight:700; cursor:pointer;
+      background:#2d7a46; color:white; font-size:15px;
+    }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .secondary { background:#eef2f4; color:#263238; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:18px; }
+    .status { margin-top:18px; padding:12px 14px; border-radius:10px; background:#eef2f4; white-space:pre-wrap; }
+    .ok { background:#edf8ef; }
+    .err { background:#fff0f0; color:#8f1d1d; }
+    table { width:100%; border-collapse:collapse; margin-top:18px; font-size:14px; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #e6eaed; }
+    code { background:#f2f4f5; padding:2px 5px; border-radius:5px; }
+    .pill { display:inline-block; padding:4px 8px; border-radius:99px; background:#eef2f4; margin-right:6px; font-size:12px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>KeepItGreen GIS Uploader</h1>
+    <div class="muted">Upload GeoJSON or zipped Shapefile directly to the Volakas Proposal Feature Service.</div>
+
+    <div id="drop" class="drop">
+      <strong>Drop a .geojson / .json / .zip here</strong><br>
+      <span class="muted">or click to choose a file</span>
+      <input id="file" type="file" accept=".geojson,.json,.zip,application/geo+json,application/json,application/zip" />
+    </div>
+
+    <div id="summary" style="display:none">
+      <div>
+        <span class="pill" id="fileName"></span>
+        <span class="pill" id="geomType"></span>
+        <span class="pill" id="featureCount"></span>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Destination layer</label>
+          <select id="targetLayer">
+            <option value="0">Proposal Sites (Point)</option>
+            <option value="1">Proposal Routes (Polyline)</option>
+            <option value="2">Proposal Areas (Polygon)</option>
+          </select>
+        </div>
+        <div>
+          <label>Default Category (only if missing)</label>
+          <select id="defaultCategory">
+            <option value="">— none —</option>
+            <option value="1">Category 1</option>
+            <option value="2">Category 2</option>
+            <option value="3">Category 3</option>
+            <option value="4">Category 4</option>
+            <option value="5">Category 5</option>
+          </select>
+        </div>
+        <div>
+          <label>Default Name (only if missing)</label>
+          <input id="defaultName" type="text" placeholder="e.g. Imported proposal" />
+        </div>
+        <div>
+          <label>Default Location (only if missing)</label>
+          <input id="defaultLocation" type="text" placeholder="e.g. Volakas" />
+        </div>
+      </div>
+
+      <div style="margin-top:14px">
+        <label>Default Comments (only if missing)</label>
+        <textarea id="defaultComments" placeholder="Optional"></textarea>
+      </div>
+
+      <table>
+        <thead><tr><th>Detected source fields</th><th>Auto-maps to</th></tr></thead>
+        <tbody id="fieldMap"></tbody>
+      </table>
+
+      <div class="row">
+        <button id="uploadBtn">Upload features</button>
+        <button id="clearBtn" class="secondary">Clear</button>
+      </div>
+    </div>
+
+    <div id="status" class="status">Ready. No data has been sent yet.</div>
+  </div>
+</div>
+
+<script>
+const BASE = "https://services6.arcgis.com/GAyN9WJ2dkh4VWJ1/arcgis/rest/services/Drama_-_Volakas_Proposal/FeatureServer";
+const LAYERS = {
+  0: {name:"Proposal Sites", kind:"point"},
+  1: {name:"Proposal Routes", kind:"polyline"},
+  2: {name:"Proposal Areas", kind:"polygon"}
+};
+const DEST_FIELDS = ["Name","Category","Location","Date","Comments"];
+
+let currentFeatures = [];
+let currentKind = null;
+let sourceFields = [];
+
+const el = id => document.getElementById(id);
+const drop = el("drop");
+const fileInput = el("file");
+
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("drag"); };
+drop.ondragleave = () => drop.classList.remove("drag");
+drop.ondrop = e => {
+  e.preventDefault(); drop.classList.remove("drag");
+  if (e.dataTransfer.files?.length) loadFile(e.dataTransfer.files[0]);
+};
+fileInput.onchange = () => {
+  if (fileInput.files?.length) loadFile(fileInput.files[0]);
+};
+
+function setStatus(msg, cls="") {
+  const s = el("status");
+  s.textContent = msg;
+  s.className = "status " + cls;
+}
+
+function geomKind(type) {
+  if (!type) return null;
+  if (type === "Point" || type === "MultiPoint") return "point";
+  if (type === "LineString" || type === "MultiLineString") return "polyline";
+  if (type === "Polygon" || type === "MultiPolygon") return "polygon";
+  return null;
+}
+
+function explodeFeature(f) {
+  const g = f.geometry;
+  if (!g) return [];
+  const p = f.properties || {};
+  switch (g.type) {
+    case "Point": return [f];
+    case "MultiPoint":
+      return g.coordinates.map(c => ({type:"Feature",properties:{...p},geometry:{type:"Point",coordinates:c}}));
+    case "LineString": return [f];
+    case "MultiLineString":
+      return g.coordinates.map(c => ({type:"Feature",properties:{...p},geometry:{type:"LineString",coordinates:c}}));
+    case "Polygon": return [f];
+    case "MultiPolygon":
+      return g.coordinates.map(c => ({type:"Feature",properties:{...p},geometry:{type:"Polygon",coordinates:c}}));
+    default: return [];
+  }
+}
+
+async function loadFile(file) {
+  try {
+    setStatus("Reading file...");
+    let gj;
+    const lower = file.name.toLowerCase();
+
+    if (lower.endsWith(".zip")) {
+      const ab = await file.arrayBuffer();
+      gj = await shp(ab);
+      if (Array.isArray(gj)) {
+        const all = [];
+        for (const fc of gj) all.push(...(fc.features || []));
+        gj = {type:"FeatureCollection", features:all};
+      }
+    } else {
+      const txt = await file.text();
+      gj = JSON.parse(txt);
+    }
+
+    let feats = [];
+    if (gj.type === "FeatureCollection") feats = gj.features || [];
+    else if (gj.type === "Feature") feats = [gj];
+    else if (gj.type && gj.coordinates) feats = [{type:"Feature", properties:{}, geometry:gj}];
+    else throw new Error("Unsupported GeoJSON structure.");
+
+    feats = feats.flatMap(explodeFeature).filter(f => f.geometry);
+    if (!feats.length) throw new Error("No supported features found.");
+
+    const kinds = [...new Set(feats.map(f => geomKind(f.geometry.type)).filter(Boolean))];
+    if (kinds.length !== 1) throw new Error("Mixed geometry types detected. Please upload one geometry type at a time.");
+
+    currentKind = kinds[0];
+    currentFeatures = feats;
+    sourceFields = [...new Set(feats.flatMap(f => Object.keys(f.properties || {})))];
+
+    const layerId = currentKind === "point" ? 0 : currentKind === "polyline" ? 1 : 2;
+    el("targetLayer").value = String(layerId);
+    el("fileName").textContent = file.name;
+    el("geomType").textContent = currentKind;
+    el("featureCount").textContent = feats.length + " feature(s)";
+    el("summary").style.display = "";
+
+    renderFieldMap();
+    setStatus("File parsed successfully. Nothing has been uploaded yet.", "ok");
+  } catch (err) {
+    currentFeatures = [];
+    currentKind = null;
+    el("summary").style.display = "none";
+    setStatus("Error: " + err.message, "err");
+  }
+}
+
+function renderFieldMap() {
+  const tbody = el("fieldMap");
+  tbody.innerHTML = "";
+  if (!sourceFields.length) {
+    tbody.innerHTML = '<tr><td colspan="2" class="muted">No attribute fields detected.</td></tr>';
+    return;
+  }
+  for (const f of sourceFields) {
+    const match = DEST_FIELDS.find(d => d.toLowerCase() === f.toLowerCase()) || "—";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><code>${escapeHtml(f)}</code></td><td>${match}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function lonLatToWebMercator(coord) {
+  const lon = coord[0];
+  let lat = coord[1];
+  lat = Math.max(Math.min(lat, 89.5), -89.5);
+  const x = lon * 20037508.34 / 180;
+  let y = Math.log(Math.tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180);
+  y = y * 20037508.34 / 180;
+  return [x, y];
+}
+
+function ringSignedArea(ring) {
+  let a = 0;
+  for (let i=0, j=ring.length-1; i<ring.length; j=i++) {
+    a += (ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1]);
+  }
+  return a / 2;
+}
+
+function ensureClosed(ring) {
+  if (!ring.length) return ring;
+  const a = ring[0], b = ring[ring.length-1];
+  if (a[0] !== b[0] || a[1] !== b[1]) ring = [...ring, [...a]];
+  return ring;
+}
+
+function toEsriGeometry(g) {
+  if (g.type === "Point") {
+    const [x,y] = lonLatToWebMercator(g.coordinates);
+    return {x,y,spatialReference:{wkid:102100}};
+  }
+  if (g.type === "LineString") {
+    return {
+      paths:[g.coordinates.map(lonLatToWebMercator)],
+      spatialReference:{wkid:102100}
+    };
+  }
+  if (g.type === "Polygon") {
+    const rings = g.coordinates.map((r, idx) => {
+      let rr = ensureClosed(r.map(lonLatToWebMercator));
+      const area = ringSignedArea(rr);
+      // Esri: exterior clockwise, holes counterclockwise.
+      if (idx === 0 && area > 0) rr = [...rr].reverse();
+      if (idx > 0 && area < 0) rr = [...rr].reverse();
+      return rr;
+    });
+    return {rings, spatialReference:{wkid:102100}};
+  }
+  throw new Error("Unsupported geometry: " + g.type);
+}
+
+function findProp(props, destName) {
+  const k = Object.keys(props || {}).find(x => x.toLowerCase() === destName.toLowerCase());
+  return k ? props[k] : undefined;
+}
+
+function normalizeDate(v) {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (typeof v === "number") return v;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? undefined : t;
+}
+
+function toAttributes(f) {
+  const p = f.properties || {};
+  const out = {};
+
+  let v = findProp(p, "Name");
+  if (v === undefined || v === null || v === "") v = el("defaultName").value.trim() || undefined;
+  if (v !== undefined) out.Name = String(v);
+
+  v = findProp(p, "Category");
+  if (v === undefined || v === null || v === "") v = el("defaultCategory").value || undefined;
+  if (v !== undefined) {
+    const n = Number(v);
+    if (Number.isFinite(n)) out.Category = n;
+  }
+
+  v = findProp(p, "Location");
+  if (v === undefined || v === null || v === "") v = el("defaultLocation").value.trim() || undefined;
+  if (v !== undefined) out.Location = String(v);
+
+  v = normalizeDate(findProp(p, "Date"));
+  if (v !== undefined) out.Date = v;
+
+  v = findProp(p, "Comments");
+  if (v === undefined || v === null || v === "") v = el("defaultComments").value.trim() || undefined;
+  if (v !== undefined) out.Comments = String(v);
+
+  return out;
+}
+
+async function postChunk(layerId, features) {
+  const body = new URLSearchParams();
+  body.set("f","json");
+  body.set("rollbackOnFailure","true");
+  body.set("features", JSON.stringify(features));
+
+  const r = await fetch(`${BASE}/${layerId}/addFeatures`, {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},
+    body
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
+}
+
+el("uploadBtn").onclick = async () => {
+  if (!currentFeatures.length) return;
+
+  const layerId = Number(el("targetLayer").value);
+  const expected = LAYERS[layerId].kind;
+  if (expected !== currentKind) {
+    setStatus(`Geometry mismatch: file is ${currentKind}, but selected layer expects ${expected}.`, "err");
+    return;
+  }
+
+  if (!confirm(`Upload ${currentFeatures.length} feature(s) to ${LAYERS[layerId].name}?`)) return;
+
+  el("uploadBtn").disabled = true;
+  try {
+    const esriFeatures = currentFeatures.map(f => ({
+      geometry: toEsriGeometry(f.geometry),
+      attributes: toAttributes(f)
+    }));
+
+    const CHUNK = 200;
+    let ok = 0, fail = 0;
+    const errors = [];
+
+    for (let i=0; i<esriFeatures.length; i+=CHUNK) {
+      setStatus(`Uploading ${Math.min(i+CHUNK, esriFeatures.length)} / ${esriFeatures.length}...`);
+      const data = await postChunk(layerId, esriFeatures.slice(i, i+CHUNK));
+      if (data.error) throw new Error(data.error.message + (data.error.details?.length ? "\n" + data.error.details.join("\n") : ""));
+      const results = data.addResults || [];
+      for (const res of results) {
+        if (res.success) ok++;
+        else {
+          fail++;
+          if (res.error) errors.push(`${res.error.code}: ${res.error.description || res.error.message || "Unknown error"}`);
+        }
+      }
+    }
+
+    setStatus(
+      `Upload complete.\nSuccessful: ${ok}\nFailed: ${fail}` +
+      (errors.length ? `\n\nFirst errors:\n${errors.slice(0,8).join("\n")}` : ""),
+      fail ? "err" : "ok"
+    );
+  } catch (err) {
+    setStatus("Upload failed: " + err.message, "err");
+  } finally {
+    el("uploadBtn").disabled = false;
+  }
+};
+
+el("clearBtn").onclick = () => {
+  currentFeatures = [];
+  currentKind = null;
+  sourceFields = [];
+  fileInput.value = "";
+  el("summary").style.display = "none";
+  setStatus("Ready. No data has been sent yet.");
+};
+</script>
+</body>
+</html>
