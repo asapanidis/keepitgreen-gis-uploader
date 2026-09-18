@@ -51,6 +51,7 @@
     }
 
     .app-header {
+      position: relative;
       min-height: var(--header-height);
       display: flex;
       align-items: center;
@@ -107,6 +108,21 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .header-center-title {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+
+      font-size: 12px;
+      line-height: 1.2;
+      font-weight: 700;
+
+      color: rgba(255,255,255,.92);
+      white-space: nowrap;
+      pointer-events: none;
     }
 
     .header-status {
@@ -561,6 +577,36 @@
 
     .map-badge strong { color: var(--green-dark); }
 
+    .keepitgreen-map-link {
+      position: absolute;
+      right: 14px;
+      bottom: 38px;
+      z-index: 6;
+
+      display: block;
+      padding: 6px 8px;
+
+      border: 1px solid rgba(0,0,0,.10);
+      border-radius: 8px;
+
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 2px 7px rgba(0,0,0,.12);
+
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+
+    .keepitgreen-map-link:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 10px rgba(0,0,0,.16);
+    }
+
+    .keepitgreen-map-link img {
+      display: block;
+      width: 96px;
+      max-height: 44px;
+      object-fit: contain;
+    }
+
     .loading-overlay {
       position: absolute;
       inset: 0;
@@ -623,13 +669,16 @@
         </div>
         <div>
           <div class="brand-title">Διεύθυνση Δασών Ευβοίας</div>
-          <div class="brand-subtitle">Πιλοτικό Σύστημα Γεωχωρικών Δεδομένων</div>
         </div>
+      </div>
+
+      <div class="header-center-title">
+        Πιλοτικό Σύστημα Γεωχωρικών Δεδομένων
       </div>
 
       <div class="header-status">
         <span class="status-dot"></span>
-        <span>Δοκιμαστική Έκδοση v3</span>
+        <span>Δοκιμαστική Έκδοση v4</span>
       </div>
     </header>
 
@@ -815,6 +864,17 @@
         >
           <arcgis-zoom slot="top-left"></arcgis-zoom>
         </arcgis-map>
+
+        <a
+          class="keepitgreen-map-link"
+          href="https://keepitgreen.maps.arcgis.com/home/index.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="KeepItGreen ArcGIS Online"
+          aria-label="Άνοιγμα KeepItGreen ArcGIS Online"
+        >
+          <img src="keepitgreen-logo.png" alt="KeepItGreen" />
+        </a>
 
         <div class="loading-overlay" id="loadingOverlay">
           <div class="loading-card">
